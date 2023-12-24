@@ -1,8 +1,15 @@
+import Dependencies.forceGuava
+import Dependencies.forceHapiVersion
+import Dependencies.forceJacksonVersion
+import Dependencies.removeIncompatibleDependencies
+import java.net.URL
+
 plugins {
   id(Plugins.BuildPlugins.androidLib)
   id(Plugins.BuildPlugins.kotlinAndroid)
   id(Plugins.BuildPlugins.mavenPublish)
   jacoco
+  id(Plugins.BuildPlugins.dokka).version(Plugins.Versions.dokka)
 }
 
 publishArtifact(Releases.Workflow)
@@ -10,23 +17,19 @@ publishArtifact(Releases.Workflow)
 createJacocoTestReportTask()
 
 android {
+  namespace = "com.google.android.fhir.workflow"
   compileSdk = Sdk.compileSdk
-  buildToolsVersion = Plugins.Versions.buildTools
-
   defaultConfig {
     minSdk = Sdk.minSdk
-    targetSdk = Sdk.targetSdk
     testInstrumentationRunner = Dependencies.androidJunitRunner
     // Need to specify this to prevent junit runner from going deep into our dependencies
     testInstrumentationRunnerArguments["package"] = "com.google.android.fhir.workflow"
-    // Required when setting minSdkVersion to 20 or lower
-    // See https://developer.android.com/studio/write/java8-support
-    multiDexEnabled = true
   }
 
   sourceSets {
-    getByName("test").apply { resources.setSrcDirs(listOf("testdata")) }
-    getByName("androidTest").apply { resources.setSrcDirs(listOf("testdata")) }
+    getByName("androidTest").apply { resources.setSrcDirs(listOf("sampledata")) }
+
+    getByName("test").apply { resources.setSrcDirs(listOf("sampledata")) }
   }
 
   // Added this for fixing out of memory issue in running test cases
@@ -36,23 +39,13 @@ android {
   }
 
   buildTypes {
-    getByName("release") {
+    release {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
     }
   }
 
-  compileOptions {
-    // Flag to enable support for the new language APIs
-    // See https://developer.android.com/studio/write/java8-support
-    isCoreLibraryDesugaringEnabled = true
-    // Sets Java compatibility to Java 8
-    // See https://developer.android.com/studio/write/java8-support
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
-  }
-
-  packagingOptions {
+  packaging {
     resources.excludes.addAll(
       listOf(
         "license.html",
@@ -73,70 +66,89 @@ android {
         "META-INF/sun-jaxb.episode",
         "META-INF/*.kotlin_module",
         "readme.html",
-      )
+      ),
     )
   }
-
-  // See https://developer.android.com/studio/write/java8-support
-  kotlinOptions { jvmTarget = JavaVersion.VERSION_1_8.toString() }
-
   configureJacocoTestOptions()
+  kotlin { jvmToolchain(11) }
+  compileOptions { isCoreLibraryDesugaringEnabled = true }
 }
+
+afterEvaluate { configureFirebaseTestLabForLibraries() }
 
 configurations {
   all {
-    exclude(module = "json")
-    exclude(module = "xpp3")
-    exclude(module = "hamcrest-all")
-    exclude(module = "javax.activation")
-    exclude(group = "org.apache.httpcomponents")
-    exclude(module = "activation", group = "javax.activation")
-    exclude(module = "javaee-api", group = "javax")
-    exclude(module = "hamcrest-all")
-    exclude(module = "javax.activation")
-    exclude(group = "xml-apis")
-    exclude(group = "com.google.code.javaparser")
-    exclude(group = "jakarta.activation")
+    removeIncompatibleDependencies()
+    forceGuava()
+    forceHapiVersion()
+    forceJacksonVersion()
   }
-
-  compileOnly { exclude(group = "org.eclipse.persistence") }
 }
 
 dependencies {
+  coreLibraryDesugaring(Dependencies.desugarJdkLibs)
+
   androidTestImplementation(Dependencies.AndroidxTest.core)
   androidTestImplementation(Dependencies.AndroidxTest.extJunit)
   androidTestImplementation(Dependencies.AndroidxTest.extJunitKtx)
   androidTestImplementation(Dependencies.AndroidxTest.runner)
   androidTestImplementation(Dependencies.AndroidxTest.workTestingRuntimeKtx)
+  androidTestImplementation(Dependencies.jsonAssert)
   androidTestImplementation(Dependencies.junit)
   androidTestImplementation(Dependencies.truth)
-  androidTestImplementation(project(":testing"))
+  androidTestImplementation(Dependencies.xmlUnit)
+  androidTestImplementation(project(":workflow-testing"))
 
   api(Dependencies.HapiFhir.structuresR4) { exclude(module = "junit") }
-
-  coreLibraryDesugaring(Dependencies.desugarJdkLibs)
+  api(Dependencies.HapiFhir.guavaCaching)
 
   implementation(Dependencies.Androidx.coreKtx)
   implementation(Dependencies.Cql.evaluator)
-  implementation(Dependencies.Cql.evaluatorBuilder)
-  implementation(Dependencies.Cql.evaluatorDagger)
-  implementation(Dependencies.Cql.evaluatorPlanDef)
-  implementation(Dependencies.Jackson.annotations)
-  implementation(Dependencies.Jackson.core)
-  implementation(Dependencies.Jackson.databind)
-  implementation(Dependencies.JavaJsonTools.jacksonCoreUtils)
-  implementation(Dependencies.JavaJsonTools.msgSimple)
+  implementation(Dependencies.Cql.evaluatorFhirJackson)
+  implementation(Dependencies.HapiFhir.guavaCaching)
   implementation(Dependencies.Kotlin.kotlinCoroutinesAndroid)
   implementation(Dependencies.Kotlin.kotlinCoroutinesCore)
   implementation(Dependencies.Kotlin.stdlib)
-  implementation(Dependencies.stax)
-  implementation(Dependencies.woodstox)
+  implementation(Dependencies.androidFhirEngine) { exclude(module = "truth") }
+  implementation(Dependencies.androidFhirKnowledge)
+  implementation(Dependencies.timber)
   implementation(Dependencies.xerces)
-  implementation(project(":engine"))
 
   testImplementation(Dependencies.AndroidxTest.core)
+  testImplementation(Dependencies.jsonAssert)
   testImplementation(Dependencies.junit)
   testImplementation(Dependencies.robolectric)
   testImplementation(Dependencies.truth)
-  testImplementation(project(":testing"))
+  testImplementation(Dependencies.xmlUnit)
+  testImplementation(project(mapOf("path" to ":knowledge")))
+  testImplementation(project(":workflow-testing"))
+}
+
+tasks.dokkaHtml.configure {
+  outputDirectory.set(file("../docs/${Releases.Workflow.artifactId}/${Releases.Workflow.version}"))
+  suppressInheritedMembers.set(true)
+  dokkaSourceSets {
+    named("main") {
+      moduleName.set(Releases.Workflow.artifactId)
+      moduleVersion.set(Releases.Workflow.version)
+      noAndroidSdkLink.set(false)
+      sourceLink {
+        localDirectory.set(file("src/main/java"))
+        remoteUrl.set(
+          URL("https://github.com/google/android-fhir/tree/master/workflow/src/main/java"),
+        )
+        remoteLineSuffix.set("#L")
+      }
+      externalDocumentationLink {
+        url.set(URL("https://hapifhir.io/hapi-fhir/apidocs/hapi-fhir-structures-r4/"))
+        packageListUrl.set(
+          URL("https://hapifhir.io/hapi-fhir/apidocs/hapi-fhir-structures-r4/element-list"),
+        )
+      }
+      externalDocumentationLink {
+        url.set(URL("https://hapifhir.io/hapi-fhir/apidocs/hapi-fhir-base/"))
+        packageListUrl.set(URL("https://hapifhir.io/hapi-fhir/apidocs/hapi-fhir-base/element-list"))
+      }
+    }
+  }
 }

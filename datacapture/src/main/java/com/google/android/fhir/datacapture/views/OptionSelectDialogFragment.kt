@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Google LLC
+ * Copyright 2022-2023 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,15 +39,19 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.fhir.datacapture.R
+import com.google.android.fhir.datacapture.extensions.itemAnswerOptionImage
+import com.google.android.fhir.datacapture.views.factories.OptionSelectOption
+import com.google.android.fhir.datacapture.views.factories.QuestionnaireItemDialogSelectViewModel
+import com.google.android.fhir.datacapture.views.factories.SelectedOptions
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 internal class OptionSelectDialogFragment(
-  val title: CharSequence,
-  val config: Config,
+  private val title: CharSequence,
+  private val config: Config,
+  private val selectedOptions: SelectedOptions,
 ) : DialogFragment() {
 
   /** Configures this [OptionSelectDialogFragment]. */
@@ -71,28 +75,25 @@ internal class OptionSelectDialogFragment(
           // Use the custom questionnaire theme if it is specified
           R.styleable.QuestionnaireTheme_questionnaire_theme,
           // Otherwise, use the default questionnaire theme
-          R.style.Theme_Questionnaire
+          R.style.Theme_Questionnaire,
         )
       }
 
     val dialogThemeContext = ContextThemeWrapper(requireContext(), themeId)
-    val view =
-      LayoutInflater.from(dialogThemeContext)
-        .inflate(R.layout.questionnaire_item_multi_select_dialog, null)
+    val view = LayoutInflater.from(dialogThemeContext).inflate(R.layout.multi_select_dialog, null)
 
     val recyclerView: RecyclerView = view.findViewById(R.id.recycler_view)
     recyclerView.layoutManager = LinearLayoutManager(requireContext())
     recyclerView.addItemDecoration(
-      MarginItemDecoration(resources.getDimensionPixelOffset(R.dimen.item_margin_vertical))
+      MarginItemDecoration(
+        marginVertical = resources.getDimensionPixelOffset(R.dimen.option_item_margin_vertical),
+        marginHorizontal = resources.getDimensionPixelOffset(R.dimen.option_item_margin_horizontal),
+      ),
     )
 
     val adapter = OptionSelectAdapter(multiSelectEnabled = config.multiSelect)
     recyclerView.adapter = adapter
-    lifecycleScope.launch {
-      viewModel.getSelectedOptionsFlow(questionLinkId).collect { selectedOptions ->
-        adapter.submitList(selectedOptions.toOptionRows())
-      }
-    }
+    adapter.submitList(selectedOptions.toOptionRows())
 
     val dialog =
       MaterialAlertDialogBuilder(requireContext()).setView(view).create().apply {
@@ -102,7 +103,7 @@ internal class OptionSelectDialogFragment(
             // https://stackoverflow.com/a/9118027
             it.clearFlags(
               WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
             )
             // Adjust the dialog after the keyboard is on so that OK-CANCEL buttons are visible.
             // SOFT_INPUT_ADJUST_RESIZE is deprecated and the suggested alternative
@@ -135,7 +136,7 @@ internal class OptionSelectDialogFragment(
           options = currentList.filterIsInstance<OptionSelectRow.Option>().map { it.option },
           otherOptions =
             currentList.filterIsInstance<OptionSelectRow.OtherEditText>().map { it.currentText },
-        )
+        ),
       )
     }
   }
@@ -170,10 +171,12 @@ internal class OptionSelectDialogFragment(
 
 private class OptionSelectAdapter(val multiSelectEnabled: Boolean) :
   ListAdapter<OptionSelectRow, OptionSelectViewHolder>(DIFF_CALLBACK) {
+  lateinit var recyclerView: RecyclerView
 
   override fun getItemViewType(position: Int): Int =
     when (getItem(position)) {
-      is OptionSelectRow.Option, is OptionSelectRow.OtherRow ->
+      is OptionSelectRow.Option,
+      is OptionSelectRow.OtherRow, ->
         if (multiSelectEnabled) Types.OPTION_MULTI else Types.OPTION_SINGLE
       is OptionSelectRow.OtherEditText -> Types.OTHER_EDIT_TEXT
       OptionSelectRow.OtherAddAnother -> Types.OTHER_ADD_ANOTHER
@@ -197,6 +200,12 @@ private class OptionSelectAdapter(val multiSelectEnabled: Boolean) :
             (holder as OptionSelectViewHolder.OptionSingle).radioButton
           }
         compoundButton.text = item.option.displayString
+        compoundButton.setCompoundDrawablesRelative(
+          item.option.item.itemAnswerOptionImage(compoundButton.context),
+          null,
+          null,
+          null,
+        )
         compoundButton.setOnCheckedChangeListener(null)
         compoundButton.isChecked = item.option.selected
         compoundButton.setOnCheckedChangeListener { _, checked ->
@@ -215,6 +224,10 @@ private class OptionSelectAdapter(val multiSelectEnabled: Boolean) :
         compoundButton.isChecked = item.selected
         compoundButton.setOnCheckedChangeListener { _, checked ->
           submitSelectedChange(position = holder.adapterPosition, selected = checked)
+          // Scroll down the recyclerview to show the Add another answer button on the screen.
+          if (checked) {
+            recyclerView.smoothScrollToPosition(this@OptionSelectAdapter.itemCount)
+          }
         }
       }
       is OptionSelectRow.OtherEditText -> {
@@ -236,6 +249,8 @@ private class OptionSelectAdapter(val multiSelectEnabled: Boolean) :
               it.add(holder.adapterPosition, OptionSelectRow.OtherEditText.fromText(""))
             }
           submitList(newList)
+          // Scroll down the recyclerview to show the Add another answer button on the screen.
+          recyclerView.smoothScrollToPosition(this@OptionSelectAdapter.itemCount)
         }
       }
     }
@@ -273,7 +288,8 @@ private class OptionSelectAdapter(val multiSelectEnabled: Boolean) :
     when (this) {
       is OptionSelectRow.Option -> copy(option = option.copy(selected = selected))
       is OptionSelectRow.OtherRow -> copy(selected = selected)
-      OptionSelectRow.OtherAddAnother, is OptionSelectRow.OtherEditText -> null
+      OptionSelectRow.OtherAddAnother,
+      is OptionSelectRow.OtherEditText, -> null
     }
 
   private enum class Types {
@@ -282,10 +298,15 @@ private class OptionSelectAdapter(val multiSelectEnabled: Boolean) :
     OTHER_EDIT_TEXT,
     OTHER_ADD_ANOTHER,
   }
+
+  override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+    super.onAttachedToRecyclerView(recyclerView)
+    this.recyclerView = recyclerView
+  }
 }
 
 private fun List<OptionSelectRow>.sanitizeOtherOptionRows(
-  multiSelectEnabled: Boolean
+  multiSelectEnabled: Boolean,
 ): List<OptionSelectRow> {
   var sanitized = this
   // Now that we've set the selected states properly, we need to make sure that the "Other" rows
@@ -311,10 +332,10 @@ private fun List<OptionSelectRow>.sanitizeOtherOptionRows(
         when (it) {
           // don't drop these
           is OptionSelectRow.Option,
-          is OptionSelectRow.OtherRow -> false
+          is OptionSelectRow.OtherRow, -> false
           // drop these
           is OptionSelectRow.OtherEditText,
-          OptionSelectRow.OtherAddAnother -> true
+          OptionSelectRow.OtherAddAnother, -> true
         }
       }
   }
@@ -357,13 +378,13 @@ private sealed class OptionSelectViewHolder(parent: ViewGroup, layout: Int) :
   RecyclerView.ViewHolder(LayoutInflater.from(parent.context).inflate(layout, parent, false)) {
   /** Radio button option. */
   class OptionSingle(parent: ViewGroup) :
-    OptionSelectViewHolder(parent, R.layout.questionnaire_item_option_item_single) {
+    OptionSelectViewHolder(parent, R.layout.option_item_single) {
     val radioButton: RadioButton = itemView.findViewById(R.id.radio_button)
   }
 
   /** Checkbox option. */
   class OptionMulti(parent: ViewGroup) :
-    OptionSelectViewHolder(parent, R.layout.questionnaire_item_option_item_multi) {
+    OptionSelectViewHolder(parent, R.layout.option_item_multi) {
     val checkbox: CheckBox = itemView.findViewById(R.id.checkbox)
   }
 
@@ -371,7 +392,7 @@ private sealed class OptionSelectViewHolder(parent: ViewGroup, layout: Int) :
    * Freeform option, only shown if [OptionSelectDialogFragment.Config.otherOptionsAllowed] is true.
    */
   class OtherEditText(parent: ViewGroup) :
-    OptionSelectViewHolder(parent, R.layout.questionnaire_item_option_item_other_text) {
+    OptionSelectViewHolder(parent, R.layout.option_item_other_text) {
     val editText: EditText = itemView.findViewById(R.id.edit_text)
     val delete: View = itemView.findViewById(R.id.delete_button)
 
@@ -389,7 +410,7 @@ private sealed class OptionSelectViewHolder(parent: ViewGroup, layout: Int) :
    * Freeform option, only shown if [OptionSelectDialogFragment.Config.otherOptionsAllowed] is true.
    */
   class OtherAddAnother(parent: ViewGroup) :
-    OptionSelectViewHolder(parent, R.layout.questionnaire_item_option_item_other_add_another) {
+    OptionSelectViewHolder(parent, R.layout.option_item_other_add_another) {
     val addAnother: Button = itemView.findViewById(R.id.add_another)
   }
 }

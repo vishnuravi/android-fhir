@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Google LLC
+ * Copyright 2022-2023 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,10 @@ fun <R : Resource> getResourceType(clazz: Class<R>): ResourceType {
 }
 
 /** Returns the {@link Class} object for the resource type. */
+fun <R : Resource> getResourceClass(resourceType: ResourceType): Class<R> =
+  getResourceClass(resourceType.name)
+
+/** Returns the {@link Class} object for the resource type. */
 fun <R : Resource> getResourceClass(resourceType: String): Class<R> {
   // Remove any curly brackets in the resource type string. This is to work around an issue with
   // JSON deserialization in the CQL engine on Android. The resource type string incorrectly
@@ -53,7 +57,7 @@ fun <R : Resource> getResourceClass(resourceType: String): Class<R> {
   return Class.forName(R4_RESOURCE_PACKAGE_PREFIX + className) as Class<R>
 }
 
-internal val Resource.versionId
+internal val Resource.versionId: String?
   get() = meta.versionId
 
 internal val Resource.lastUpdated

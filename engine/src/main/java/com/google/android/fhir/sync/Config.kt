@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Google LLC
+ * Copyright 2023 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,20 +31,24 @@ typealias ParamMap = Map<String, String>
 /** Constant for the max number of retries in case of sync failure */
 @PublishedApi internal const val MAX_RETRIES_ALLOWED = "max_retires"
 
+/** Constant for the Greater Than Search Prefix */
+@PublishedApi internal const val GREATER_THAN_PREFIX = "gt"
+
 val defaultRetryConfiguration =
   RetryConfiguration(BackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS), 3)
 
 object SyncDataParams {
   const val SORT_KEY = "_sort"
   const val LAST_UPDATED_KEY = "_lastUpdated"
-  const val ADDRESS_COUNTRY_KEY = "address-country"
+  const val SUMMARY_KEY = "_summary"
+  const val SUMMARY_COUNT_VALUE = "count"
 }
 
 /** Configuration for period synchronisation */
 class PeriodicSyncConfiguration(
   /**
    * Constraints that specify the requirements needed before the synchronisation is triggered. E.g.
-   * network type (Wifi, 3G etc), the device should be charging etc.
+   * network type (WiFi, 3G etc), the device should be charging etc.
    */
   val syncConstraints: Constraints = Constraints.Builder().build(),
 
@@ -55,14 +59,14 @@ class PeriodicSyncConfiguration(
   val repeat: RepeatInterval,
 
   /** Configuration for synchronization retry */
-  val retryConfiguration: RetryConfiguration? = defaultRetryConfiguration
+  val retryConfiguration: RetryConfiguration? = defaultRetryConfiguration,
 )
 
 data class RepeatInterval(
   /** The interval at which the sync should be triggered in */
   val interval: Long,
   /** The time unit for the repeat interval */
-  val timeUnit: TimeUnit
+  val timeUnit: TimeUnit,
 )
 
 fun ParamMap.concatParams(): String {
@@ -80,7 +84,7 @@ data class RetryConfiguration(
   val backoffCriteria: BackoffCriteria,
 
   /** Maximum retries for a failing [FhirSyncWorker] */
-  val maxRetries: Int
+  val maxRetries: Int,
 )
 
 /**
@@ -99,5 +103,5 @@ data class BackoffCriteria(
   val backoffDelay: Long,
 
   /** The time unit for [backoffDelay] */
-  val timeUnit: TimeUnit
+  val timeUnit: TimeUnit,
 )

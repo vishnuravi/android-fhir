@@ -10,25 +10,27 @@ publishArtifact(Releases.Common)
 createJacocoTestReportTask()
 
 android {
+  namespace = "com.google.android.fhir.common"
   compileSdk = Sdk.compileSdk
-  buildToolsVersion = Plugins.Versions.buildTools
-
-  defaultConfig {
-    minSdk = Sdk.minSdk
-    targetSdk = Sdk.targetSdk
-  }
-  compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
-  }
-  kotlinOptions { jvmTarget = JavaVersion.VERSION_1_8.toString() }
+  defaultConfig { minSdk = Sdk.minSdk }
   configureJacocoTestOptions()
+  kotlin { jvmToolchain(11) }
 }
 
-configurations { all { exclude(module = "xpp3") } }
+configurations {
+  all {
+    exclude(module = "xpp3")
+    exclude(module = "hapi-fhir-caching-caffeine")
+    exclude(group = "com.github.ben-manes.caffeine", module = "caffeine")
+
+    resolutionStrategy { force("com.google.guava:guava:32.1.3-android") }
+  }
+}
 
 dependencies {
-  api(Dependencies.HapiFhir.structuresR4)
+  // REVERT to DEPENDENCIES LATER
+  api("ca.uhn.hapi.fhir:hapi-fhir-structures-r4:6.10.0")
+  api("ca.uhn.hapi.fhir:hapi-fhir-caching-guava:6.10.0")
 
   implementation(Dependencies.fhirUcum)
 

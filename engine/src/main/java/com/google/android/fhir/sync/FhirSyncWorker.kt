@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Google LLC
+ * Copyright 2023 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,8 +24,11 @@ import androidx.work.workDataOf
 import com.google.android.fhir.FhirEngine
 import com.google.android.fhir.FhirEngineProvider
 import com.google.android.fhir.OffsetDateTimeTypeAdapter
-import com.google.android.fhir.sync.Result.Error
-import com.google.android.fhir.sync.Result.Success
+import com.google.android.fhir.sync.download.DownloaderImpl
+import com.google.android.fhir.sync.upload.UploadStrategy
+import com.google.android.fhir.sync.upload.Uploader
+import com.google.android.fhir.sync.upload.patch.PatchGeneratorFactory
+import com.google.android.fhir.sync.upload.request.UploadRequestGeneratorFactory
 import com.google.gson.ExclusionStrategy
 import com.google.gson.FieldAttributes
 import com.google.gson.GsonBuilder
@@ -33,8 +36,6 @@ import java.time.OffsetDateTime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
@@ -42,7 +43,12 @@ import timber.log.Timber
 abstract class FhirSyncWorker(appContext: Context, workerParams: WorkerParameters) :
   CoroutineWorker(appContext, workerParams) {
   abstract fun getFhirEngine(): FhirEngine
+
   abstract fun getDownloadWorkManager(): DownloadWorkManager
+
+  abstract fun getConflictResolver(): ConflictResolver
+
+  abstract fun getUploadStrategy(): UploadStrategy
 
   private val gson =
     GsonBuilder()
@@ -59,33 +65,43 @@ abstract class FhirSyncWorker(appContext: Context, workerParams: WorkerParameter
         ?: return Result.failure(
           buildWorkData(
             IllegalStateException(
-              "FhirEngineConfiguration.ServerConfiguration is not set. Call FhirEngineProvider.init to initialize with appropriate configuration."
-            )
-          )
+              "FhirEngineConfiguration.ServerConfiguration is not set. Call FhirEngineProvider.init to initialize with appropriate configuration.",
+            ),
+          ),
         )
 
-    val fhirSynchronizer =
-      FhirSynchronizer(applicationContext, getFhirEngine(), dataSource, getDownloadWorkManager())
-    val flow = MutableSharedFlow<State>()
+    val synchronizer =
+      FhirSynchronizer(
+        applicationContext,
+        getFhirEngine(),
+        UploadConfiguration(
+          Uploader(
+            dataSource = dataSource,
+            patchGenerator = PatchGeneratorFactory.byMode(getUploadStrategy().patchGeneratorMode),
+            requestGenerator =
+              UploadRequestGeneratorFactory.byMode(getUploadStrategy().requestGeneratorMode),
+          ),
+        ),
+        DownloadConfiguration(
+          DownloaderImpl(dataSource, getDownloadWorkManager()),
+          getConflictResolver(),
+        ),
+      )
 
     val job =
       CoroutineScope(Dispatchers.IO).launch {
-        flow.collect {
+        synchronizer.syncState.collect {
           // now send Progress to work manager so caller app can listen
           setProgress(buildWorkData(it))
 
-          if (it is State.Finished || it is State.Failed) {
+          if (it is SyncJobStatus.Finished || it is SyncJobStatus.Failed) {
             this@launch.cancel()
           }
         }
       }
 
-    fhirSynchronizer.subscribe(flow)
-
-    Timber.v("Subscribed to flow for progress")
-
-    val result = fhirSynchronizer.synchronize()
-    val output = buildOutput(result)
+    val result = synchronizer.synchronize()
+    val output = buildWorkData(result)
 
     // await/join is needed to collect states completely
     kotlin.runCatching { job.join() }.onFailure(Timber::w)
@@ -99,31 +115,19 @@ abstract class FhirSyncWorker(appContext: Context, workerParams: WorkerParameter
      * [RetryConfiguration.maxRetries] set by user.
      */
     val retries = inputData.getInt(MAX_RETRIES_ALLOWED, 0)
-    return when {
-      result is Success -> {
-        Result.success(output)
-      }
-      retries > runAttemptCount -> {
-        Result.retry()
-      }
-      else -> {
-        Result.failure(output)
-      }
-    }
-  }
-
-  private fun buildOutput(result: com.google.android.fhir.sync.Result): Data {
     return when (result) {
-      is Success -> buildWorkData(State.Finished(result))
-      is Error -> buildWorkData(State.Failed(result))
+      is SyncJobStatus.Finished -> Result.success(output)
+      else -> {
+        if (retries > runAttemptCount) Result.retry() else Result.failure(output)
+      }
     }
   }
 
-  private fun buildWorkData(state: State): Data {
+  private fun buildWorkData(state: SyncJobStatus): Data {
     return workDataOf(
       // send serialized state and type so that consumer can convert it back
       "StateType" to state::class.java.name,
-      "State" to gson.toJson(state)
+      "State" to gson.toJson(state),
     )
   }
 
@@ -132,11 +136,12 @@ abstract class FhirSyncWorker(appContext: Context, workerParams: WorkerParameter
   }
 
   /**
-   * Exclusion strategy for [Gson] that handles field exclusions for [State] returned by
+   * Exclusion strategy for [Gson] that handles field exclusions for [SyncJobStatus] returned by
    * FhirSynchronizer. It should skip serializing the exceptions to avoid exceeding WorkManager
    * WorkData limit
+   *
    * @see <a
-   * href="https://github.com/google/android-fhir/issues/707">https://github.com/google/android-fhir/issues/707</a>
+   *   href="https://github.com/google/android-fhir/issues/707">https://github.com/google/android-fhir/issues/707</a>
    */
   internal class StateExclusionStrategy : ExclusionStrategy {
     override fun shouldSkipField(field: FieldAttributes) = field.name.equals("exceptions")

@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Google LLC
+ * Copyright 2023 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,22 +17,26 @@
 package com.google.android.fhir.db.impl
 
 import android.content.Context
+import android.database.sqlite.SQLiteException
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import ca.uhn.fhir.context.FhirContext
+import ca.uhn.fhir.context.FhirVersionEnum
+import ca.uhn.fhir.util.FhirTerser
 import com.google.android.fhir.DatabaseErrorStrategy.RECREATE_AT_OPEN
 import com.google.android.fhir.DatabaseErrorStrategy.UNSPECIFIED
 import com.google.android.fhir.db.impl.DatabaseImpl.Companion.DATABASE_PASSPHRASE_NAME
 import com.google.android.fhir.db.impl.DatabaseImpl.Companion.ENCRYPTED_DATABASE_NAME
 import com.google.android.fhir.db.impl.DatabaseImpl.Companion.UNENCRYPTED_DATABASE_NAME
+import com.google.android.fhir.index.ResourceIndexer
+import com.google.android.fhir.index.SearchParamDefinitionsProviderImpl
 import com.google.android.fhir.search.Order
 import com.google.android.fhir.search.Search
 import com.google.android.fhir.search.getQuery
 import com.google.common.truth.Truth.assertThat
 import java.security.KeyStore
 import kotlinx.coroutines.runBlocking
-import net.sqlcipher.database.SQLiteException
 import org.hl7.fhir.r4.model.Enumerations
 import org.hl7.fhir.r4.model.Patient
 import org.hl7.fhir.r4.model.ResourceType
@@ -46,6 +50,8 @@ import org.junit.runner.RunWith
 class EncryptedDatabaseErrorTest {
   private val context: Context = ApplicationProvider.getApplicationContext()
   private val parser = FhirContext.forR4().newJsonParser()
+  private val terser = FhirTerser(FhirContext.forCached(FhirVersionEnum.R4))
+  private val resourceIndexer = ResourceIndexer(SearchParamDefinitionsProviderImpl())
 
   @After
   fun tearDown() {
@@ -61,11 +67,13 @@ class EncryptedDatabaseErrorTest {
         DatabaseImpl(
             context,
             parser,
+            terser,
             DatabaseConfig(
               inMemory = false,
               enableEncryption = false,
-              databaseErrorStrategy = UNSPECIFIED
-            )
+              databaseErrorStrategy = UNSPECIFIED,
+            ),
+            resourceIndexer,
           )
           .let {
             it.insert(TEST_PATIENT_1)
@@ -77,11 +85,13 @@ class EncryptedDatabaseErrorTest {
         DatabaseImpl(
             context,
             parser,
+            terser,
             DatabaseConfig(
               inMemory = false,
               enableEncryption = true,
-              databaseErrorStrategy = UNSPECIFIED
-            )
+              databaseErrorStrategy = UNSPECIFIED,
+            ),
+            resourceIndexer,
           )
           .let {
             it.search<Patient>(
@@ -91,7 +101,7 @@ class EncryptedDatabaseErrorTest {
                   count = 100
                   from = 0
                 }
-                .getQuery()
+                .getQuery(),
             )
           }
       }
@@ -106,11 +116,13 @@ class EncryptedDatabaseErrorTest {
         DatabaseImpl(
             context,
             parser,
+            terser,
             DatabaseConfig(
               inMemory = false,
               enableEncryption = true,
-              databaseErrorStrategy = UNSPECIFIED
-            )
+              databaseErrorStrategy = UNSPECIFIED,
+            ),
+            resourceIndexer,
           )
           .let {
             it.insert(TEST_PATIENT_1)
@@ -119,7 +131,7 @@ class EncryptedDatabaseErrorTest {
 
         // GIVEN the key is lost.
         val keyStore = KeyStore.getInstance(DatabaseEncryptionKeyProvider.ANDROID_KEYSTORE_NAME)
-        keyStore.load(/* param = */ null)
+        keyStore.load(null)
         keyStore.deleteEntry(DATABASE_PASSPHRASE_NAME)
         DatabaseEncryptionKeyProvider.clearKeyCache()
 
@@ -128,11 +140,13 @@ class EncryptedDatabaseErrorTest {
         DatabaseImpl(
             context,
             parser,
+            terser,
             DatabaseConfig(
               inMemory = false,
               enableEncryption = true,
-              databaseErrorStrategy = UNSPECIFIED
-            )
+              databaseErrorStrategy = UNSPECIFIED,
+            ),
+            resourceIndexer,
           )
           .let {
             it.search<Patient>(
@@ -142,7 +156,7 @@ class EncryptedDatabaseErrorTest {
                   count = 100
                   from = 0
                 }
-                .getQuery()
+                .getQuery(),
             )
           }
       }
@@ -156,11 +170,13 @@ class EncryptedDatabaseErrorTest {
       DatabaseImpl(
           context,
           parser,
+          terser,
           DatabaseConfig(
             inMemory = false,
             enableEncryption = true,
-            databaseErrorStrategy = UNSPECIFIED
-          )
+            databaseErrorStrategy = UNSPECIFIED,
+          ),
+          resourceIndexer,
         )
         .let {
           it.insert(TEST_PATIENT_1)
@@ -169,7 +185,7 @@ class EncryptedDatabaseErrorTest {
 
       // GIVEN the key is lost.
       val keyStore = KeyStore.getInstance(DatabaseEncryptionKeyProvider.ANDROID_KEYSTORE_NAME)
-      keyStore.load(/* param = */ null)
+      keyStore.load(null)
       keyStore.deleteEntry(DATABASE_PASSPHRASE_NAME)
       DatabaseEncryptionKeyProvider.clearKeyCache()
 
@@ -178,11 +194,13 @@ class EncryptedDatabaseErrorTest {
       DatabaseImpl(
           context,
           parser,
+          terser,
           DatabaseConfig(
             inMemory = false,
             enableEncryption = true,
-            databaseErrorStrategy = RECREATE_AT_OPEN
-          )
+            databaseErrorStrategy = RECREATE_AT_OPEN,
+          ),
+          resourceIndexer,
         )
         .let {
           assertThat(
@@ -193,8 +211,8 @@ class EncryptedDatabaseErrorTest {
                     count = 100
                     from = 0
                   }
-                  .getQuery()
-              )
+                  .getQuery(),
+              ),
             )
             .isEmpty()
         }
@@ -209,11 +227,13 @@ class EncryptedDatabaseErrorTest {
         DatabaseImpl(
             context,
             parser,
+            terser,
             DatabaseConfig(
               inMemory = false,
               enableEncryption = true,
-              databaseErrorStrategy = UNSPECIFIED
-            )
+              databaseErrorStrategy = UNSPECIFIED,
+            ),
+            resourceIndexer,
           )
           .let {
             it.insert(TEST_PATIENT_1)
@@ -225,11 +245,13 @@ class EncryptedDatabaseErrorTest {
         DatabaseImpl(
             context,
             parser,
+            terser,
             DatabaseConfig(
               inMemory = false,
               enableEncryption = false,
-              databaseErrorStrategy = UNSPECIFIED
-            )
+              databaseErrorStrategy = UNSPECIFIED,
+            ),
+            resourceIndexer,
           )
           .let {
             assertThat(
@@ -240,8 +262,8 @@ class EncryptedDatabaseErrorTest {
                       count = 100
                       from = 0
                     }
-                    .getQuery()
-                )
+                    .getQuery(),
+                ),
               )
               .isEmpty()
           }
